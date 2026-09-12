@@ -1,0 +1,23 @@
+# Generated build outputs and local caches
+.build/
+dist/
+*.app/
+*.dSYM/
+*.zip
+.DS_Store
+._*
+
+# Local environment, credentials, and recordings
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.p8
+*.wav
+*.caf
+*.mp3
+*.m4a
+*.log
+听见-会议记录*.txt
+更新前字幕备份*.txt
