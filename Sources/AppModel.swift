@@ -18,6 +18,60 @@ final class AppModel: ObservableObject {
     @Published var selectedSourceName = ""
     @Published var modelsReady = false
     @Published var modelStatus = "正在检查本地模型…"
+    @Published var translationEngine = UserDefaults.standard.string(forKey: "translationEngine") ?? "apple" {
+        didSet { UserDefaults.standard.set(translationEngine, forKey: "translationEngine"); changeTranslationModel() }
+    }
+    @Published var omlxAddress = UserDefaults.standard.string(forKey: "omlxAddress") ?? "http://127.0.0.1:18000/v1" {
+        didSet { UserDefaults.standard.set(omlxAddress, forKey: "omlxAddress"); omlxModels = []; omlxStatus = "地址已更新，请刷新模型"; changeTranslationModel() }
+    }
+    @Published var omlxKey = "" {
+        didSet { omlxModels = []; omlxStatus = "凭据已更新，请刷新模型"; changeTranslationModel() }
+    }
+    @Published var omlxModel = UserDefaults.standard.string(forKey: "omlxModel") ?? "" {
+        didSet { UserDefaults.standard.set(omlxModel, forKey: "omlxModel"); changeTranslationModel() }
+    }
+    @Published var omlxModels: [String] = []
+    @Published var omlxStatus = "点击刷新，读取本机模型列表"
+    @Published var loadingModels = false
+    private var speechReady = false
+    private var appleReady = false
+    var needsAppleModels: Bool { !speechReady || (translationEngine == "apple" && !appleReady) }
+    var engineName: String { translationEngine == "apple" ? "Apple 本地翻译" : "oMLX · \(omlxModel)" }
+    private var localTranslator: LocalTranslation { .init(address: omlxAddress, apiKey: omlxKey, model: omlxModel) }
+
+    private func updateReadiness() {
+        let ready = translationEngine == "apple" ? appleReady : omlxModels.contains(omlxModel)
+        modelsReady = speechReady && ready
+        modelStatus = !speechReady ? "请准备 macOS 英文识别模型" : modelsReady ? "英文识别已就绪 · \(engineName)" : translationEngine == "apple" ? "请准备 Apple 中英翻译模型" : "请刷新并选择 oMLX 模型，再运行引擎自检"
+    }
+
+    private func changeTranslationModel() {
+        // A paused session may still have an in-flight translation: discard it.
+        generation = UUID()
+        translateTask?.cancel(); translateTask = nil
+        session?.cancel(); session = nil
+        pending.removeAll(); translationFailed = false
+        error = nil; phase = "已选择 \(engineName)"
+        updateReadiness()
+    }
+
+    func refreshOmlxModels() async {
+        guard !active, !busy, !loadingModels else { return }
+        loadingModels = true
+        defer { loadingModels = false; updateReadiness() }
+        do {
+            omlxModels = try await localTranslator.models()
+            if !omlxModels.contains(omlxModel) { omlxModel = omlxModels.first ?? "" }
+            omlxStatus = omlxModels.isEmpty ? "服务在线，但没有可用模型" : "已连接 · \(omlxModels.count) 个模型；请用引擎自检验证推理"
+        } catch { omlxModels = []; omlxStatus = "连接失败：\(error.localizedDescription)" }
+    }
+
+    func translateText(_ text: String) async throws -> String {
+        if translationEngine == "omlx" { return try await localTranslator.translate(text) }
+        if session == nil { session = makeTranslationSession() }
+        return try await session!.translate(text).targetText
+    }
+
     @Published var translationConfiguration: TranslationSession.Configuration?
     @Published var bilingual = true
     @Published var fontSize = 24.0
@@ -70,9 +124,10 @@ final class AppModel: ObservableObject {
         let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
         let speechStatus = await AssetInventory.status(forModules: [transcriber])
         let translationStatus = await LanguageAvailability().status(from: Locale.Language(identifier: "en"), to: Locale.Language(identifier: "zh-Hans"))
-        modelsReady = speechStatus == .installed && translationStatus == .installed
-        modelStatus = modelsReady ? "英文识别与中文翻译模型已就绪" : "首次使用需准备英文识别与中英翻译模型"
-        if modelsReady { session = makeTranslationSession() }
+        speechReady = speechStatus == .installed
+        appleReady = translationStatus == .installed
+        updateReadiness()
+        if translationEngine == "omlx" { await refreshOmlxModels() }
     }
 
     private func makeTranslationSession() -> TranslationSession {
@@ -92,6 +147,12 @@ final class AppModel: ObservableObject {
                     try await request.downloadAndInstall()
                 }
                 try Task.checkCancellation()
+                if translationEngine == "omlx" {
+                    busy = false
+                    await checkModels()
+                    phase = "英文识别模型已准备"
+                    return
+                }
                 phase = "正在准备中英翻译模型…"
                 if translationConfiguration == nil {
                     translationConfiguration = .init(source: Locale.Language(identifier: "en"), target: Locale.Language(identifier: "zh-Hans"), preferredStrategy: .lowLatency)
@@ -110,12 +171,14 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
-        guard !active, !busy, modelsReady else { return }
+        guard !active, !busy, !loadingModels, modelsReady else { return }
         refreshApplications()
         guard let application = selectedApplication else { error = "请先打开会议软件，在右侧选择后开始。"; return }
         if demo { stopDemo(); transcript = Transcript() }
         busy = true; error = nil; phase = "正在连接所选会议软件…"
         generation = UUID()
+        translateTask?.cancel(); translateTask = nil
+        pending.removeAll(); translationFailed = false
         let token = generation
         timeOffset = (transcript.captions.last?.end ?? -0.01) + 0.01
         Task {
@@ -164,6 +227,8 @@ final class AppModel: ObservableObject {
                 try await capture.start(application: application, format: format, continuation: continuation)
                 guard generation == token else { await capture.stop(); return }
                 active = true; busy = false; phase = "正在聆听 · \(sourceName)"; lastSignal = Date(); lastResult = Date()
+                for row in transcript.captions where row.chinese.isEmpty { pending[row.id] = row.english }
+                runTranslationQueue()
                 showOverlay()
                 healthTask = Task { [weak self] in
                     while !Task.isCancelled {
@@ -201,11 +266,10 @@ final class AppModel: ObservableObject {
             guard let self, self.generation == token, !Task.isCancelled else { return }
             while !self.pending.isEmpty, !Task.isCancelled, self.generation == token {
                 guard let id = self.pending.keys.min(), let source = self.pending.removeValue(forKey: id) else { break }
-                if self.session == nil { self.session = self.makeTranslationSession() }
                 do {
-                    let translated = try await self.session!.translate(source)
+                    let translated = try await self.translateText(source)
                     guard self.generation == token, !Task.isCancelled else { break }
-                    _ = self.transcript.apply(id: id, source: source, translation: translated.targetText)
+                    _ = self.transcript.apply(id: id, source: source, translation: translated)
                 } catch {
                     if !Task.isCancelled, self.generation == token {
                         self.error = "中文翻译暂不可用：\(error.localizedDescription)。英文识别继续保留，可稍后点击「重试翻译」。"
@@ -221,6 +285,7 @@ final class AppModel: ObservableObject {
     }
 
     func retryTranslation() {
+        guard !busy, !loadingModels, modelsReady else { return }
         error = nil
         translationFailed = false
         session = makeTranslationSession()
@@ -229,15 +294,15 @@ final class AppModel: ObservableObject {
     }
 
     func testEngines() {
-        guard !active, !busy, modelsReady else { return }
+        guard !active, !busy, !loadingModels, modelsReady else { return }
         resetTranscript()
         busy = true; phase = "引擎自检：生成测试语音 → 英文识别 → 中文翻译…"
         Task {
             do {
-                let result = try await EngineSelfTest.run()
+                let result = try await EngineSelfTest.run { text in try await self.translateText(text) }
                 let id = transcript.ingest(start: 0, end: 5, text: result.english, final: true)!
                 _ = transcript.apply(id: id, source: result.english, translation: result.chinese)
-                phase = "引擎自检通过 · 真实识别及翻译（合成测试语音）"
+                phase = "引擎自检通过 · \(engineName)（合成测试语音）"
                 demo = true
                 engineTest = true
                 showOverlay()

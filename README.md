@@ -14,7 +14,17 @@
 4. 所选软件播放英文后，显示英文与中文字幕。戴耳机也能使用；不采集麦克风。
 5. 更换软件时先暂停，再选择新来源。暂停后保留字幕记录；「本次记录 → 导出」可保存文本。
 
-首次使用若模型尚未安装，点击「准备本地模型」并完成 Apple 语言模型下载。本机已安装模型时无需重复下载，不需要 API Key。
+首次使用若模型尚未安装，点击「准备本地模型」并完成 Apple 语言模型下载。本机已安装模型时无需重复下载，使用 Apple 引擎不需要 API Key。
+
+## 0.3.0 翻译模型选择
+
+在右侧「字幕设置 → 翻译模型」选择 Apple 本地翻译或 oMLX 本地模型。英文语音识别始终由 macOS SpeechAnalyzer 完成。
+
+使用 oMLX：先启动本机 oMLX，填写服务地址（默认 `http://127.0.0.1:18000/v1`），点击「连接 / 刷新模型」，在下拉框中选择已安装的模型，再点击「引擎自检」验证真实识别和翻译。模型列表可见不代表推理一定可用；不支持的模型会显示服务错误。
+
+API Key 留空时从本机 `~/.omlx/settings.json` 读取，不复制或写入工程；也可以手动填写，仅保存在本次运行内存中。仅接受本机 HTTP 地址，不支持远程服务器，不发送屏幕或原始音频给 oMLX。识别出的英文文本会发送给本机 oMLX；服务自身日志策略由 oMLX 控制。
+
+引擎、地址与模型选择自动记忆。采集中不能更改设置；暂停后切换，已有字幕保留，未完成的翻译在继续时使用所选模型处理。切换不会重新翻译已有中文字幕。服务中断时保留英文，恢复后点击「重试翻译」。每次收到完整句子的译文后更新字幕，不显示模型思考过程。翻译准确度取决于所选模型，日期、专有名词仍需核对。
 
 ## 0.2.1 连续字幕
 
@@ -30,7 +40,7 @@ macOS 仍管理音频访问授权，并可能显示系统录音状态指示。�
 
 ## 原型功能与范围
 
-- Apple SpeechAnalyzer 流式英文识别、Apple Translation 设备端英译中。
+- Apple SpeechAnalyzer 流式英文识别；Apple Translation 或 oMLX 本机模型英译中。
 - 原生主窗口、悬浮字幕、菜单栏、字号及透明度、双语显示、置顶和鼠标穿透。
 - 原始音频仅在内存中处理，不写入音频文件；字幕退出即清除，仅主动导出时保存。
 - 「字幕演示」为预设文本；「引擎自检」为合成语音识别和翻译，均不能替代真实会议测试。
@@ -54,6 +64,8 @@ open dist/听见.app
 
 技术资料：[Core Audio 应用音频采集](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps)、[SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer)、[TranslationSession](https://developer.apple.com/documentation/translation/translationsession)。
 
+
+接口错误处理测试：`bash Tools/ModelTests/run.sh`（使用本机 18091 端口的模拟服务，不调用真实模型）。
 
 ## 工程结构
 

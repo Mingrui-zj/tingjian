@@ -52,7 +52,7 @@ private final class TestSpeech: @unchecked Sendable {
 
 enum EngineSelfTest {
     @MainActor
-    static func run() async throws -> (english: String, chinese: String) {
+    static func run(translate: @MainActor (String) async throws -> String) async throws -> (english: String, chinese: String) {
         let generator = TestSpeech()
         let url = try await generator.create()
         defer { try? FileManager.default.removeItem(at: url) }
@@ -80,10 +80,9 @@ enum EngineSelfTest {
             guard english.lowercased().contains("testing") else {
                 throw AppError.message("测试音频识别结果未包含预期词 testing：\(english)")
             }
-            let session = TranslationSession(installedSource: Locale.Language(identifier: "en"), target: Locale.Language(identifier: "zh-Hans"), preferredStrategy: .lowLatency)
-            let result = try await session.translate(english)
-            guard !result.targetText.isEmpty else { throw AppError.message("翻译引擎返回空文本。") }
-            return (english, result.targetText)
+            let chinese = try await translate(english)
+            guard !chinese.isEmpty else { throw AppError.message("翻译引擎返回空文本。") }
+            return (english, chinese)
         } catch { await analyzer.cancelAndFinishNow(); throw error }
     }
 }

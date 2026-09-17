@@ -165,7 +165,7 @@ struct MainView: View {
                     HStack { Label("设备上的 AI", systemImage: "cpu").font(.system(size: 13, weight: .medium)); Spacer(); if model.modelsReady { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) } }
                     Text(model.modelStatus).font(.system(size: 12)).foregroundStyle(.secondary)
                     HStack {
-                        if !model.modelsReady {
+                        if model.needsAppleModels {
                             Button("准备本地模型") { model.prepareModels() }.disabled(model.busy || model.active)
                         }
                         Button("字幕演示") { model.startDemo() }.disabled(model.busy || model.active)
@@ -173,7 +173,7 @@ struct MainView: View {
                             Button("引擎自检") { model.testEngines() }.disabled(model.busy || model.active)
                         }
                         Spacer()
-                        Text("无需 API Key").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(model.translationEngine == "apple" ? "Apple 本地" : "oMLX 本机").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }.padding(16).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
                 Text("识别与翻译在本机完成。首次下载模型需要联网；原始音频不落盘。")
@@ -188,7 +188,7 @@ struct MainView: View {
         }
         .frame(minWidth: 820, minHeight: 780)
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle("听见 · 会议字幕 0.2.1")
+        .navigationTitle("听见 · 会议字幕 0.3.0")
         .translationTask(model.translationConfiguration) { session in await model.prepareTranslation(using: session) }
         .task { model.refreshApplications(); await model.checkModels() }
     }
@@ -214,6 +214,30 @@ struct MainView: View {
                     Text("不共享屏幕，不采集麦克风。切换软件前请先暂停翻译。")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("翻译模型").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Picker("翻译引擎", selection: $model.translationEngine) {
+                        Text("Apple 本地翻译").tag("apple")
+                        Text("oMLX 本地模型").tag("omlx")
+                    }
+                    if model.translationEngine == "omlx" {
+                        TextField("服务地址", text: $model.omlxAddress).textFieldStyle(.roundedBorder)
+                        SecureField("API Key（留空自动读取本机配置）", text: $model.omlxKey).textFieldStyle(.roundedBorder)
+                        Text("手动填写的密钥仅用于本次运行。地址仅支持本机。")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                        Picker("oMLX 模型", selection: $model.omlxModel) {
+                            if !model.omlxModels.contains(model.omlxModel) { Text("请刷新模型").tag(model.omlxModel) }
+                            ForEach(model.omlxModels, id: \.self) { Text($0).tag($0) }
+                        }
+                        Button(model.loadingModels ? "正在连接…" : "连接 / 刷新模型") {
+                            Task { await model.refreshOmlxModels() }
+                        }
+                        Text(model.omlxStatus).font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    Text("英文识别使用 macOS。暂停后可切换翻译模型，已有字幕保留。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                .disabled(model.active || model.busy || model.loadingModels)
                 HStack { Text("英语"); Spacer(); Image(systemName: "arrow.right").foregroundStyle(.secondary); Spacer(); Text("简体中文") }.font(.system(size: 13))
                 Divider()
                 VStack(alignment: .leading, spacing: 9) {
